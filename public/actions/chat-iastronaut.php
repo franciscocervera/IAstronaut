@@ -36,23 +36,24 @@ function loadEnvFile(string $path): void {
 
 loadEnvFile($root . '/.env');
 
-$apiKey = (string)($_ENV['OPENAI_API_KEY'] ?? getenv('OPENAI_API_KEY') ?? '');
-if ($apiKey === '') {
-  http_response_code(500);
-  echo json_encode(['error' => 'Falta configurar OPENAI_API_KEY en el entorno del servidor o en .env'], JSON_UNESCAPED_UNICODE);
-  exit;
-}
-
 function envString(string $key, string $default): string {
   $value = $_ENV[$key] ?? getenv($key);
   if (!is_string($value) || trim($value) === '') return $default;
   return trim($value);
 }
 
-$OPENAI_CHAT_MODEL = envString('OPENAI_CHAT_MODEL', 'gpt-4o-mini');
-$OPENAI_STT_MODEL = envString('OPENAI_STT_MODEL', 'gpt-4o-mini-transcribe');
-$OPENAI_TTS_MODEL = envString('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts');
-$OPENAI_TTS_VOICE = envString('OPENAI_TTS_VOICE', 'nova');
+$apiKey = envString('OPENROUTER_API_KEY', '');
+if ($apiKey === '') {
+  http_response_code(500);
+  echo json_encode(['error' => 'Falta configurar OPENROUTER_API_KEY en el servidor o en .env'], JSON_UNESCAPED_UNICODE);
+  exit;
+}
+
+const OPENROUTER_API_BASE = 'https://openrouter.ai/api/v1';
+$OPENROUTER_CHAT_MODEL = envString('OPENROUTER_CHAT_MODEL', 'google/gemini-2.5-flash-lite');
+$OPENROUTER_STT_MODEL = envString('OPENROUTER_STT_MODEL', 'mistralai/voxtral-mini-transcribe');
+$OPENROUTER_TTS_MODEL = envString('OPENROUTER_TTS_MODEL', 'microsoft/mai-voice-2.1-flash');
+$OPENROUTER_TTS_VOICE = envString('OPENROUTER_TTS_VOICE', 'es-MX-Harper:MAI-Voice-2.1-Flash');
 
 $RATE_WINDOW = configEnvInt('IASTRONAUT_RATE_WINDOW', 900, 60, 86400);
 $TEXT_SESSION_LIMIT = configEnvInt('IASTRONAUT_TEXT_SESSION_LIMIT', 60, 1, 2000);
@@ -79,7 +80,7 @@ function enforceAiRateLimit(string $scope, int $sessionLimit, int $ipLimit, int 
 
   http_response_code(429);
   header('Retry-After: ' . (int) $result['retry_after']);
-  echo json_encode(['error' => 'Se alcanzó el límite temporal de la demostración. Intenta nuevamente en unos minutos.'], JSON_UNESCAPED_UNICODE);
+  echo json_encode(['error' => 'Se alcanzó el límite de solicitudes. Intenta nuevamente en unos minutos.'], JSON_UNESCAPED_UNICODE);
   exit;
 }
 
@@ -92,56 +93,94 @@ function ttsCleanText(string $text): string {
   return trim($text);
 }
 
-function openaiJson(string $apiKey, string $url, array $payload): array {
-  $ch = curl_init($url);
+function openrouterHeaders(string $apiKey, bool $json = false): array {
+  $headers = [
+    'Authorization: Bearer ' . $apiKey,
+    'X-Title: IAstronaut VR',
+  ];
+  if ($json) $headers[] = 'Content-Type: application/json';
+  return $headers;
+}
+
+function openrouterJson(string $apiKey, string $endpoint, array $payload): array {
+  $encoded = json_encode($payload, JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+  if ($encoded === false) return ['ok' => false, 'code' => 0, 'err' => 'JSON inválido', 'json' => null];
+  $ch = curl_init(OPENROUTER_API_BASE . $endpoint);
   curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $apiKey, 'Content-Type: application/json'],
-    CURLOPT_POSTFIELDS => json_encode($payload, JSON_UNESCAPED_UNICODE),
+    CURLOPT_HTTPHEADER => openrouterHeaders($apiKey, true),
+    CURLOPT_POSTFIELDS => $encoded,
     CURLOPT_CONNECTTIMEOUT => 10,
     CURLOPT_TIMEOUT => 55,
   ]);
   $result = curl_exec($ch);
   $err = curl_error($ch);
-  $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
   curl_close($ch);
-  return ['ok' => $result !== false && $code >= 200 && $code < 300, 'code' => $code, 'err' => $err, 'raw' => $result, 'json' => $result ? json_decode($result, true) : null];
+  $json = is_string($result) ? json_decode($result, true) : null;
+  return ['ok' => $result !== false && $code >= 200 && $code < 300 && is_array($json), 'code' => $code, 'err' => $err, 'json' => $json];
 }
 
-function openaiMultipart(string $apiKey, string $url, array $fields): array {
-  $ch = curl_init($url);
+function openrouterMultipart(string $apiKey, string $endpoint, array $fields): array {
+  $ch = curl_init(OPENROUTER_API_BASE . $endpoint);
   curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $apiKey],
+    CURLOPT_HTTPHEADER => openrouterHeaders($apiKey),
     CURLOPT_POSTFIELDS => $fields,
     CURLOPT_CONNECTTIMEOUT => 10,
     CURLOPT_TIMEOUT => 70,
   ]);
   $result = curl_exec($ch);
   $err = curl_error($ch);
-  $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
   curl_close($ch);
-  return ['ok' => $result !== false && $code >= 200 && $code < 300, 'code' => $code, 'err' => $err, 'raw' => $result, 'json' => $result ? json_decode($result, true) : null];
+  $json = is_string($result) ? json_decode($result, true) : null;
+  return ['ok' => $result !== false && $code >= 200 && $code < 300 && is_array($json), 'code' => $code, 'err' => $err, 'json' => $json];
 }
 
-function openaiTTSBase64(string $apiKey, string $model, string $voice, string $text): array {
-  $ch = curl_init('https://api.openai.com/v1/audio/speech');
+function openrouterTTSBase64(string $apiKey, string $model, string $voice, string $text): array {
+  $payload = json_encode([
+    'model' => $model,
+    'voice' => $voice,
+    'input' => $text,
+    'response_format' => 'mp3',
+  ], JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+  if ($payload === false) return ['ok' => false, 'code' => 0, 'err' => 'JSON inválido'];
+
+  $ch = curl_init(OPENROUTER_API_BASE . '/audio/speech');
   curl_setopt_array($ch, [
     CURLOPT_POST => true,
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_HTTPHEADER => ['Authorization: Bearer ' . $apiKey, 'Content-Type: application/json'],
-    CURLOPT_POSTFIELDS => json_encode(['model' => $model, 'voice' => $voice, 'input' => $text, 'format' => 'mp3'], JSON_UNESCAPED_UNICODE),
+    CURLOPT_HTTPHEADER => openrouterHeaders($apiKey, true),
+    CURLOPT_POSTFIELDS => $payload,
     CURLOPT_CONNECTTIMEOUT => 10,
-    CURLOPT_TIMEOUT => 45,
+    CURLOPT_TIMEOUT => 50,
   ]);
-  $bin = curl_exec($ch);
+  $audio = curl_exec($ch);
   $err = curl_error($ch);
-  $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+  $contentType = strtolower(trim(explode(';', (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE))[0]));
   curl_close($ch);
-  if ($bin === false || $code < 200 || $code >= 300) return ['ok' => false, 'code' => $code, 'err' => $err ?: 'TTS error'];
-  return ['ok' => true, 'audio_base64' => base64_encode($bin)];
+
+  if ($audio === false || $code < 200 || $code >= 300) {
+    return ['ok' => false, 'code' => $code, 'err' => $err ?: 'Solicitud TTS rechazada'];
+  }
+  // Evita devolver JSON de error u otros datos como audio al navegador.
+  $isMp3 = is_string($audio) && strlen($audio) >= 4
+    && (strncmp($audio, 'ID3', 3) === 0 || (ord($audio[0]) === 0xFF && (ord($audio[1]) & 0xE0) === 0xE0));
+  $validType = in_array($contentType, ['audio/mpeg', 'audio/mp3', 'audio/mpeg3', 'application/octet-stream', ''], true);
+  if (!$isMp3 || !$validType || strlen($audio) > 8388608) {
+    return ['ok' => false, 'code' => $code, 'err' => 'La respuesta no es un MP3 válido'];
+  }
+  return ['ok' => true, 'audio_base64' => base64_encode($audio)];
+}
+
+function logOpenrouterError(string $operation, array $result): void {
+  // Evita escribir transcripciones, respuestas o claves de API en los registros.
+  error_log('IAstronaut OpenRouter ' . $operation . ' HTTP ' . (int) ($result['code'] ?? 0)
+    . ': ' . cleanValue($result['err'] ?? '', 120));
 }
 
 function cleanValue(mixed $value, int $maxLength = 180): string {
@@ -209,7 +248,7 @@ if (stripos($contentType, 'multipart/form-data') !== false && isset($_FILES['aud
   $detectedMime = class_exists('finfo') ? (string) (new finfo(FILEINFO_MIME_TYPE))->file($tmp) : '';
   $uploadType = trim((string) ($_FILES['audio']['type'] ?? 'audio/webm'));
   $mime = trim(explode(';', $detectedMime !== '' ? $detectedMime : $uploadType, 2)[0]) ?: 'audio/webm';
-  $allowedMimes = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/x-m4a', 'video/webm'];
+  $allowedMimes = ['audio/webm', 'audio/ogg', 'audio/mp4', 'audio/mpeg', 'audio/x-m4a', 'video/webm', 'video/mp4'];
   if (!in_array($mime, $allowedMimes, true)) {
     http_response_code(415);
     echo json_encode(['error' => 'Formato de audio no compatible'], JSON_UNESCAPED_UNICODE);
@@ -217,9 +256,9 @@ if (stripos($contentType, 'multipart/form-data') !== false && isset($_FILES['aud
   }
   enforceAiRateLimit('iastronaut.audio', $AUDIO_SESSION_LIMIT, $AUDIO_IP_LIMIT, $RATE_WINDOW);
   $file = new CURLFile($tmp, $mime, $name ?: 'audio.webm');
-  $transcription = openaiMultipart($apiKey, 'https://api.openai.com/v1/audio/transcriptions', ['file' => $file, 'model' => $OPENAI_STT_MODEL, 'language' => 'es']);
+  $transcription = openrouterMultipart($apiKey, '/audio/transcriptions', ['file' => $file, 'model' => $OPENROUTER_STT_MODEL, 'language' => 'es']);
   if (!$transcription['ok']) {
-    error_log('IAstronaut STT error ' . $transcription['code'] . ': ' . ($transcription['err'] ?: (string)$transcription['raw']));
+    logOpenrouterError('STT', $transcription);
     http_response_code(502);
     echo json_encode(['error' => 'No fue posible transcribir el audio en este momento'], JSON_UNESCAPED_UNICODE);
     exit;
@@ -251,9 +290,9 @@ if (stripos($contentType, 'multipart/form-data') !== false && isset($_FILES['aud
       exit;
     }
     enforceAiRateLimit('iastronaut.tts', $TTS_SESSION_LIMIT, $TTS_IP_LIMIT, $RATE_WINDOW);
-    $ttsOnly = openaiTTSBase64($apiKey, $OPENAI_TTS_MODEL, $OPENAI_TTS_VOICE, $ttsText);
+    $ttsOnly = openrouterTTSBase64($apiKey, $OPENROUTER_TTS_MODEL, $OPENROUTER_TTS_VOICE, $ttsText);
     if (!$ttsOnly['ok']) {
-      error_log('IAstronaut TTS error ' . $ttsOnly['code'] . ': ' . $ttsOnly['err']);
+      logOpenrouterError('TTS', $ttsOnly);
       http_response_code(502);
       echo json_encode(['error' => 'No fue posible generar el audio'], JSON_UNESCAPED_UNICODE);
       exit;
@@ -339,14 +378,14 @@ foreach ($history as $message) $messages[] = $message;
 if ($missionState !== '') $messages[] = ['role' => 'system', 'content' => $missionState];
 $messages[] = ['role' => 'user', 'content' => $userText];
 
-$chat = openaiJson($apiKey, 'https://api.openai.com/v1/chat/completions', [
-  'model' => $OPENAI_CHAT_MODEL,
+$chat = openrouterJson($apiKey, '/chat/completions', [
+  'model' => $OPENROUTER_CHAT_MODEL,
   'messages' => $messages,
   'temperature' => 0.65,
 ]);
 
 if (!$chat['ok']) {
-  error_log('IAstronaut chat error ' . $chat['code'] . ': ' . ($chat['err'] ?: (string)$chat['raw']));
+  logOpenrouterError('chat', $chat);
   http_response_code(502);
   echo json_encode(['error' => 'El canal de IA no está disponible temporalmente'], JSON_UNESCAPED_UNICODE);
   exit;
@@ -359,8 +398,9 @@ $audioBase64 = null;
 $ttsText = null;
 if ($wantAudio) {
   $ttsText = ttsCleanText($finalReply) ?: $finalReply;
-  $tts = openaiTTSBase64($apiKey, $OPENAI_TTS_MODEL, $OPENAI_TTS_VOICE, $ttsText);
+  $tts = openrouterTTSBase64($apiKey, $OPENROUTER_TTS_MODEL, $OPENROUTER_TTS_VOICE, $ttsText);
   if ($tts['ok']) $audioBase64 = $tts['audio_base64'];
+  else logOpenrouterError('TTS', $tts);
 }
 
 echo json_encode([

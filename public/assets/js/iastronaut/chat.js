@@ -43,7 +43,7 @@ export function createMicChatController({ state, drawPanel, ttsPlayer, voiceGuid
         setAISpeaking(state, drawPanel, isSpeaking || requestInFlight);
     });
     function preferredMediaRecorderOptions() {
-        const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"];
+        const preferredTypes = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/ogg;codecs=opus"];
         for (const type of preferredTypes) {
             if (MediaRecorder.isTypeSupported?.(type))
                 return { mimeType: type };
@@ -201,7 +201,7 @@ export function createMicChatController({ state, drawPanel, ttsPlayer, voiceGuid
             const serverMessage = String(error?.message || "").trim();
             const message = error?.name === "AbortError"
                 ? "La respuesta tardó demasiado. Intenta nuevamente con una frase más corta."
-                : (serverMessage.includes("límite temporal") ? serverMessage : "No pude procesar tu voz. Verifica la conexión e intenta de nuevo.");
+                : ((serverMessage.includes("límite de solicitudes") || serverMessage.includes("Formato de audio")) ? serverMessage : "No pude procesar tu voz. Verifica la conexión e intenta de nuevo.");
             replaceBubble(placeholder, message, "bot");
         }
         finally {

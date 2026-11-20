@@ -208,7 +208,7 @@ export function createVoiceGuide({ ttsPlayer, localAudioBasePath = "" }) {
     let activeRequestController = null;
 
     async function requestAudio(text, requestController) {
-        const timeoutId = setTimeout(() => requestController.abort(), 45000);
+        const timeoutId = setTimeout(() => requestController.abort(), 60000);
         try {
             const response = await fetch(ENDPOINT, {
                 method: "POST",
@@ -217,7 +217,7 @@ export function createVoiceGuide({ ttsPlayer, localAudioBasePath = "" }) {
                 signal: requestController.signal,
             });
             const data = await readJsonResponse(response);
-            return data.audio_base64 || "";
+            return typeof data.audio_base64 === "string" ? data.audio_base64 : "";
         }
         finally {
             clearTimeout(timeoutId);
